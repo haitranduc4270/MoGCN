@@ -34,12 +34,12 @@ def work(data, in_feas, lr=0.001, bs=32, epochs=100, device=torch.device('cpu'),
         mmae.train()
         mmae.train_MMAE(train_loader, learning_rate=lr, device=device, epochs=epochs)
         mmae.eval()       #before save and test, fix the variables
-        torch.save(mmae, '/kaggle/working/MoGCN/model/AE/MMAE_model.pkl')
+        torch.save(mmae, 'model/AE/MMAE_model.pkl')
 
     #load saved model, used for reducing dimensions
     if mode == 0 or mode == 2:
         print('Get the latent layer output...')
-        mmae = torch.load('/kaggle/working/MoGCN/model/AE/MMAE_model.pkl')
+        mmae = torch.load('model/AE/MMAE_model.pkl', weights_only=False)
         omics_1 = TX[:, :in_feas[0]]
         omics_2 = TX[:, in_feas[0]:in_feas[0]+in_feas[1]]
         omics_3 = TX[:, in_feas[0]+in_feas[1]:in_feas[0]+in_feas[1]+in_feas[2]]
@@ -81,7 +81,7 @@ def extract_features(data, in_feas, epochs, topn=100):
         epoch_ls.append(epochs)
     for epoch in tqdm(epoch_ls):
         #load model
-        mmae = torch.load('/kaggle/working/MoGCN/model/AE/model_{}.pkl'.format(epoch))
+        mmae = torch.load('model/AE/model_{}.pkl'.format(epoch), weights_only=False)
         #get model variables
         model_dict = mmae.state_dict()
 

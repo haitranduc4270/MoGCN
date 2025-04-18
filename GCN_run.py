@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # @Time    : 2021/8/8 16:43
 # @Author  : Li Xiao
-# @File    : GCN_run.py
+# @File    : GAT_run.py
 import numpy as np
 import pandas as pd
 import argparse
@@ -12,29 +12,38 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import f1_score
 import torch
 import torch.nn.functional as F
-from gcn_model import GCN
+from gat_model import GAT
 from utils import load_data
 from utils import accuracy
+from torch_geometric.utils import from_scipy_sparse_matrix
+import scipy.sparse as sp
 
 def setup_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-def train(epoch, optimizer, features, adj, labels, idx_train):
+def adj_to_edge_index(adj):
+    # Convert dense adjacency matrix to sparse format
+    adj_sparse = sp.csr_matrix(adj.cpu().numpy())
+    # Convert sparse adjacency to edge_index format
+    edge_index, _ = from_scipy_sparse_matrix(adj_sparse)
+    return edge_index.to(adj.device)
+
+def train(epoch, optimizer, features, edge_index, labels, idx_train):
     '''
     :param epoch: training epochs
     :param optimizer: training optimizer, Adam optimizer
     :param features: the omics features
-    :param adj: the laplace adjacency matrix
+    :param edge_index: the edge_index format of the adjacency matrix
     :param labels: sample labels
     :param idx_train: the index of trained samples
     '''
-    labels.to(device)
+    labels = labels.to(device)
 
-    GCN_model.train()
+    GAT_model.train()
     optimizer.zero_grad()
-    output = GCN_model(features, adj)
-    loss_train = F.cross_entropy(output[idx_train], labels[idx_train])
+    output = GAT_model(features, edge_index)
+    loss_train = F.nll_loss(output[idx_train], labels[idx_train])
     acc_train = accuracy(output[idx_train], labels[idx_train])
     loss_train.backward()
     optimizer.step()
@@ -42,24 +51,24 @@ def train(epoch, optimizer, features, adj, labels, idx_train):
         print('Epoch: %.2f | loss train: %.4f | acc train: %.4f' %(epoch+1, loss_train.item(), acc_train.item()))
     return loss_train.data.item()
 
-def test(features, adj, labels, idx_test):
+def test(features, edge_index, labels, idx_test):
     '''
     :param features: the omics features
-    :param adj: the laplace adjacency matrix
+    :param edge_index: the edge_index format of the adjacency matrix
     :param labels: sample labels
     :param idx_test: the index of tested samples
     '''
-    GCN_model.eval()
-    output = GCN_model(features, adj)
-    loss_test = F.cross_entropy(output[idx_test], labels[idx_test])
+    GAT_model.eval()
+    output = GAT_model(features, edge_index)
+    loss_test = F.nll_loss(output[idx_test], labels[idx_test])
 
     #calculate the accuracy
     acc_test = accuracy(output[idx_test], labels[idx_test])
 
     #output is the one-hot label
-    ot = output[idx_test].detach().cpu().numpy()
+    ot = output[idx_test].max(1)[1].detach().cpu().numpy()
     #change one-hot label to digit label
-    ot = np.argmax(ot, axis=1)
+    ot = ot.tolist()
     #original label
     lb = labels[idx_test].detach().cpu().numpy()
     print('predict label: ', ot)
@@ -75,25 +84,25 @@ def test(features, adj, labels, idx_test):
     #return accuracy and f1 score
     return acc_test.item(), f
 
-def predict(features, adj, sample, idx):
+def predict(features, edge_index, sample, idx):
     '''
     :param features: the omics features
-    :param adj: the laplace adjacency matrix
+    :param edge_index: the edge_index format of the adjacency matrix
     :param sample: all sample names
     :param idx: the index of predict samples
     :return:
     '''
-    GCN_model.eval()
-    output = GCN_model(features, adj)
-    predict_label = output.detach().cpu().numpy()
-    predict_label = np.argmax(predict_label, axis=1).tolist()
+    GAT_model.eval()
+    output = GAT_model(features, edge_index)
+    predict_label = output.max(1)[1].detach().cpu().numpy()
+    predict_label = predict_label.tolist()
     #print(predict_label)
 
     res_data = pd.DataFrame({'Sample':sample, 'predict_label':predict_label})
     res_data = res_data.iloc[idx,:]
     #print(res_data)
 
-    res_data.to_csv('result/GCN_predicted_data.csv', header=True, index=False)
+    res_data.to_csv('result/GAT_predicted_data.csv', header=True, index=False)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -102,7 +111,7 @@ if __name__ == '__main__':
     parser.add_argument('--labeldata', '-ld', type=str, required=True, help='The sample label file.')
     parser.add_argument('--testsample', '-ts', type=str, help='Test sample names file.')
     parser.add_argument('--mode', '-m', type=int, choices=[0,1], default=0,
-                        help='mode 0: 10-fold cross validation; mode 1: train and test a model.')
+                        help='mode 0: 5-fold cross validation; mode 1: train and test a model.')
     parser.add_argument('--seed', '-s', type=int, default=0, help='Random seed, default=0.')
     parser.add_argument('--device', '-d', type=str, choices=['cpu', 'gpu'], default='cpu',
                         help='Training on cpu or gpu, default: cpu.')
@@ -115,6 +124,7 @@ if __name__ == '__main__':
     parser.add_argument('--threshold', '-t', type=float, default=0.005, help='Threshold to filter edges, default: 0.005')
     parser.add_argument('--nclass', '-nc', type=int, default=4, help='Number of classes, default: 4')
     parser.add_argument('--patience', '-p', type=int, default=20, help='Patience')
+    parser.add_argument('--heads', type=int, default=8, help='Number of attention heads, default: 8')
     args = parser.parse_args()
 
     # Check whether GPUs are available
@@ -135,31 +145,35 @@ if __name__ == '__main__':
 
     print('Begin training model...')
 
-    # 10-fold cross validation
+    # 5-fold cross validation
     if args.mode == 0:
-        skf = StratifiedKFold(n_splits=10, shuffle=True)
+        skf = StratifiedKFold(n_splits=5, shuffle=True)
 
         acc_res, f1_res = [], []  #record accuracy and f1 score
 
         # split train and test data
         for idx_train, idx_test in skf.split(data.iloc[:, 1:], label.iloc[:, 1]):
             # initialize a model
-            GCN_model = GCN(n_in=features.shape[1], n_hid=args.hidden, n_out=args.nclass, dropout=args.dropout)
-            GCN_model.to(device)
+            GAT_model = GAT(n_in=features.shape[1], 
+                          n_hid=args.hidden, 
+                          n_out=args.nclass, 
+                          dropout=args.dropout,
+                          heads=args.heads)
+            GAT_model.to(device)
 
             # define the optimizer
-            optimizer = torch.optim.Adam(GCN_model.parameters(), lr=args.learningrate, weight_decay=args.weight_decay)
+            optimizer = torch.optim.Adam(GAT_model.parameters(), lr=args.learningrate, weight_decay=args.weight_decay)
 
-            idx_train, idx_test= torch.tensor(idx_train, dtype=torch.long, device=device), torch.tensor(idx_test, dtype=torch.long, device=device)
+            idx_train, idx_test = torch.tensor(idx_train, dtype=torch.long, device=device), torch.tensor(idx_test, dtype=torch.long, device=device)
             for epoch in range(args.epochs):
-                train(epoch, optimizer, features, adj, labels, idx_train)
+                train(epoch, optimizer, features, adj_to_edge_index(adj), labels, idx_train)
 
             # calculate the accuracy and f1 score
-            ac, f1= test(features, adj, labels, idx_test)
+            ac, f1= test(features, adj_to_edge_index(adj), labels, idx_test)
             acc_res.append(ac)
             f1_res.append(f1)
-        print('10-fold  Acc(%.4f, %.4f)  F1(%.4f, %.4f)' % (np.mean(acc_res), np.std(acc_res), np.mean(f1_res), np.std(f1_res)))
-        #predict(features, adj, data['Sample'].tolist(), data.index.tolist())
+        print('5-fold  Acc(%.4f, %.4f)  F1(%.4f, %.4f)' % (np.mean(acc_res), np.std(acc_res), np.mean(f1_res), np.std(f1_res)))
+        #predict(features, adj_to_edge_index(adj), data['Sample'].tolist(), data.index.tolist())
 
     elif args.mode == 1:
         # load test samples
@@ -172,9 +186,13 @@ if __name__ == '__main__':
         train_idx = data[data['Sample'].isin(train_sample)].index.tolist()
         test_idx = data[data['Sample'].isin(test_sample)].index.tolist()
 
-        GCN_model = GCN(n_in=features.shape[1], n_hid=args.hidden, n_out=args.nclass, dropout=args.dropout)
-        GCN_model.to(device)
-        optimizer = torch.optim.Adam(GCN_model.parameters(), lr=args.learningrate, weight_decay=args.weight_decay)
+        GAT_model = GAT(n_in=features.shape[1], 
+                      n_hid=args.hidden, 
+                      n_out=args.nclass, 
+                      dropout=args.dropout,
+                      heads=args.heads)
+        GAT_model.to(device)
+        optimizer = torch.optim.Adam(GAT_model.parameters(), lr=args.learningrate, weight_decay=args.weight_decay)
         idx_train, idx_test = torch.tensor(train_idx, dtype=torch.long, device=device), torch.tensor(test_idx, dtype=torch.long, device=device)
 
         '''
@@ -187,7 +205,7 @@ if __name__ == '__main__':
         bad_counter, best_epoch = 0, 0
         best = 1000   #record the lowest loss value
         for epoch in range(args.epochs):
-            loss_values.append(train(epoch, optimizer, features, adj, labels, idx_train))
+            loss_values.append(train(epoch, optimizer, features, adj_to_edge_index(adj), labels, idx_train))
             if loss_values[-1] < best:
                 best = loss_values[-1]
                 best_epoch = epoch
@@ -199,10 +217,10 @@ if __name__ == '__main__':
                 break
 
             #save model of this epoch
-            torch.save(GCN_model.state_dict(), 'model/GCN/{}.pkl'.format(epoch))
+            torch.save(GAT_model.state_dict(), 'model/GAT/{}.pkl'.format(epoch))
 
             #reserve the best model, delete other models
-            files = glob.glob('model/GCN/*.pkl')
+            files = glob.glob('model/GAT/*.pkl')
             for file in files:
                 name = file.split('\\')[1]
                 epoch_nb = int(name.split('.')[0])
@@ -212,7 +230,7 @@ if __name__ == '__main__':
 
         print('Training finished.')
         print('The best epoch model is ',best_epoch)
-        GCN_model.load_state_dict(torch.load('model/GCN/{}.pkl'.format(best_epoch)))
-        predict(features, adj, all_sample, test_idx)
+        GAT_model.load_state_dict(torch.load('model/GAT/{}.pkl'.format(best_epoch)))
+        predict(features, adj_to_edge_index(adj), all_sample, test_idx)
 
     print('Finished!')

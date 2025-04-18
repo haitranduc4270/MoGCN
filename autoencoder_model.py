@@ -94,7 +94,7 @@ class MMAE(nn.Module):
 
             #save the model every 10 epochs, used for feature extraction
             if (epoch+1) % 10 ==0:
-                torch.save(self, '/kaggle/working/MoGCN/model/AE/model_{}.pkl'.format(epoch+1))
+                torch.save(self, 'model/AE/model_{}.pkl'.format(epoch+1))
 
         #draw the training loss curve
         plt.plot([i + 1 for i in range(epochs)], loss_ls)

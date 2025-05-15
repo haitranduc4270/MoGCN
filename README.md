@@ -47,3 +47,34 @@ Li X, Ma J, Leng L, Han M, Li M, He F and Zhu Y (2022) MoGCN: A Multi-Omics Inte
 
 clinical data:   https://www.linkedomics.org/data_download/TCGA-BRCA/?utm_source=chatgpt.com
 https://linkedomics.org/data_download/TCGA-BRCA/Human__TCGA_BRCA__MS__Clinical__Clinical__01_28_2016__BI__Clinical__Firehose.tsi
+
+
+Tôi đã thực hiện một số cải tiến quan trọng để tăng khả năng biểu hiện của mô hình GCN:
+Thêm Residual Connections (Kết nối phần dư):
+Giúp mô hình học tốt hơn với các lớp sâu hơn
+Giảm vấn đề vanishing gradient
+Cho phép thông tin từ các lớp trước được truyền trực tiếp đến các lớp sau
+Thêm Batch Normalization:
+Chuẩn hóa dữ liệu giữa các lớp
+Giúp quá trình huấn luyện ổn định hơn
+Tăng tốc độ hội tụ
+Thêm Attention Mechanism:
+Tạo lớp AttentionLayer mới
+Cho phép mô hình tập trung vào các đặc trưng quan trọng
+Tăng khả năng học các mối quan hệ phức tạp
+Tăng độ sâu của mô hình:
+Thêm một lớp GCN thứ ba
+Tăng khả năng học các đặc trưng phức tạp hơn
+Cải thiện Dropout:
+Đặt giá trị mặc định cho dropout là 0.5
+Thêm dropout cho lớp GCN mới
+Giúp giảm overfitting
+Cấu trúc lại forward pass:
+Tổ chức rõ ràng hơn với các comment
+Thêm residual connections ở mỗi lớp
+Áp dụng attention sau mỗi lớp GCN
+Những cải tiến này sẽ giúp mô hình:
+Học được các đặc trưng phức tạp hơn
+Ổn định hơn trong quá trình huấn luyện
+Giảm overfitting
+Tăng khả năng biểu diễn tổng thể

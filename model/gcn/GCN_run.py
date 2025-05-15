@@ -13,8 +13,8 @@ from sklearn.metrics import f1_score
 import torch
 import torch.nn.functional as F
 from gcn_model import GCN
-from utils import load_data
-from utils import accuracy
+from utils import load_data, accuracy
+from tqdm import tqdm
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -101,6 +101,7 @@ if __name__ == '__main__':
     parser.add_argument('--adjdata', '-ad', type=str, required=True, help='The adjacency matrix file.')
     parser.add_argument('--labeldata', '-ld', type=str, required=True, help='The sample label file.')
     parser.add_argument('--testsample', '-ts', type=str, help='Test sample names file.')
+    parser.add_argument('--output_file', '-o', type=str, default='result/GCN_predicted_data.csv', help='The output file.')
     parser.add_argument('--mode', '-m', type=int, choices=[0,1], default=0,
                         help='mode 0: 10-fold cross validation; mode 1: train and test a model.')
     parser.add_argument('--seed', '-s', type=int, default=0, help='Random seed, default=0.')
@@ -117,102 +118,126 @@ if __name__ == '__main__':
     parser.add_argument('--patience', '-p', type=int, default=20, help='Patience')
     args = parser.parse_args()
 
-    # Check whether GPUs are available
+     # Check whether GPUs are available
     device = torch.device('cpu')
     if args.device == 'gpu':
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # set random seed
     setup_seed(args.seed)
+    
+    files = os.listdir(args.featuredata)
+    files = [os.path.join(args.featuredata, file) for file in files]
+    
+    try:
+        result_df = pd.read_csv(args.output_file)
+    except:
+        result_df = pd.DataFrame(columns=['data_path', 'Acc_mean', 'Acc_std', 'F1_mean', 'F1_std'])
+    files = [file for file in files if file.split('/')[-1] not in result_df['data_path'].tolist()]
+    if len(files) == 0:
+        print('All files have been processed.')
+        exit(0)
+    
+    result = []
+    for file in tqdm(files):
+        # load input files
+        adj, data, label = load_data(args.adjdata, file, args.labeldata, args.threshold)
 
-    # load input files
-    adj, data, label = load_data(args.adjdata, args.featuredata, args.labeldata, args.threshold)
+        # change dataframe to Tensor
+        adj = torch.tensor(adj, dtype=torch.float, device=device)
+        features = torch.tensor(data.iloc[:, 1:].values, dtype=torch.float, device=device)
+        labels = torch.tensor(label.iloc[:, 1].values, dtype=torch.long, device=device)
 
-    # change dataframe to Tensor
-    adj = torch.tensor(adj, dtype=torch.float, device=device)
-    features = torch.tensor(data.iloc[:, 1:].values, dtype=torch.float, device=device)
-    labels = torch.tensor(label.iloc[:, 1].values, dtype=torch.long, device=device)
+        print('Begin training model...')
 
-    print('Begin training model...')
+        # 10-fold cross validation
+        if args.mode == 0:
+            skf = StratifiedKFold(n_splits=10, shuffle=True)
 
-    # 10-fold cross validation
-    if args.mode == 0:
-        skf = StratifiedKFold(n_splits=10, shuffle=True)
+            acc_res, f1_res = [], []  #record accuracy and f1 score
 
-        acc_res, f1_res = [], []  #record accuracy and f1 score
+            # split train and test data
+            for idx_train, idx_test in skf.split(data.iloc[:, 1:], label.iloc[:, 1]):
+                # initialize a model
+                GCN_model = GCN(n_in=features.shape[1], n_hid=args.hidden, n_out=args.nclass, dropout=args.dropout)
+                GCN_model.to(device)
 
-        # split train and test data
-        for idx_train, idx_test in skf.split(data.iloc[:, 1:], label.iloc[:, 1]):
-            # initialize a model
+                # define the optimizer
+                optimizer = torch.optim.Adam(GCN_model.parameters(), lr=args.learningrate, weight_decay=args.weight_decay)
+
+                idx_train, idx_test= torch.tensor(idx_train, dtype=torch.long, device=device), torch.tensor(idx_test, dtype=torch.long, device=device)
+                for epoch in range(args.epochs):
+                    train(epoch, optimizer, features, adj, labels, idx_train)
+
+                # calculate the accuracy and f1 score
+                ac, f1= test(features, adj, labels, idx_test)
+                acc_res.append(ac)
+                f1_res.append(f1)
+            print('10-fold  Acc(%.4f, %.4f)  F1(%.4f, %.4f)' % (np.mean(acc_res), np.std(acc_res), np.mean(f1_res), np.std(f1_res)))
+            result.append({
+                'data_path': file.split('/')[-1],
+                'Acc_mean': np.mean(acc_res),
+                'Acc_std': np.std(acc_res),
+                'F1_mean': np.mean(f1_res),
+                'F1_std': np.std(f1_res)
+            })
+            #predict(features, adj, data['Sample'].tolist(), data.index.tolist())
+
+        elif args.mode == 1:
+            # load test samples
+            test_sample_df = pd.read_csv(args.testsample, header=0, index_col=None)
+            test_sample = test_sample_df.iloc[:, 0].tolist()
+            all_sample = data['Sample'].tolist()
+            train_sample = list(set(all_sample)-set(test_sample))
+
+            #get index of train samples and test samples
+            train_idx = data[data['Sample'].isin(train_sample)].index.tolist()
+            test_idx = data[data['Sample'].isin(test_sample)].index.tolist()
+
             GCN_model = GCN(n_in=features.shape[1], n_hid=args.hidden, n_out=args.nclass, dropout=args.dropout)
             GCN_model.to(device)
-
-            # define the optimizer
             optimizer = torch.optim.Adam(GCN_model.parameters(), lr=args.learningrate, weight_decay=args.weight_decay)
+            idx_train, idx_test = torch.tensor(train_idx, dtype=torch.long, device=device), torch.tensor(test_idx, dtype=torch.long, device=device)
 
-            idx_train, idx_test= torch.tensor(idx_train, dtype=torch.long, device=device), torch.tensor(idx_test, dtype=torch.long, device=device)
+            '''
+            save a best model (with the minimum loss value)
+            if the loss didn't decrease in N epochs，stop the train process.
+            N can be set by args.patience 
+            '''
+            loss_values = []    #record the loss value of each epoch
+            # record the times with no loss decrease, record the best epoch
+            bad_counter, best_epoch = 0, 0
+            best = 1000   #record the lowest loss value
             for epoch in range(args.epochs):
-                train(epoch, optimizer, features, adj, labels, idx_train)
+                loss_values.append(train(epoch, optimizer, features, adj, labels, idx_train))
+                if loss_values[-1] < best:
+                    best = loss_values[-1]
+                    best_epoch = epoch
+                    bad_counter = 0
+                else:
+                    bad_counter += 1     #In this epoch, the loss value didn't decrease
 
-            # calculate the accuracy and f1 score
-            ac, f1= test(features, adj, labels, idx_test)
-            acc_res.append(ac)
-            f1_res.append(f1)
-        print('10-fold  Acc(%.4f, %.4f)  F1(%.4f, %.4f)' % (np.mean(acc_res), np.std(acc_res), np.mean(f1_res), np.std(f1_res)))
-        #predict(features, adj, data['Sample'].tolist(), data.index.tolist())
+                if bad_counter == args.patience:
+                    break
 
-    elif args.mode == 1:
-        # load test samples
-        test_sample_df = pd.read_csv(args.testsample, header=0, index_col=None)
-        test_sample = test_sample_df.iloc[:, 0].tolist()
-        all_sample = data['Sample'].tolist()
-        train_sample = list(set(all_sample)-set(test_sample))
+                #save model of this epoch
+                torch.save(GCN_model.state_dict(), 'model/GCN/{}.pkl'.format(epoch))
 
-        #get index of train samples and test samples
-        train_idx = data[data['Sample'].isin(train_sample)].index.tolist()
-        test_idx = data[data['Sample'].isin(test_sample)].index.tolist()
+                #reserve the best model, delete other models
+                files = glob.glob('model/GCN/*.pkl')
+                for file in files:
+                    # print(f'file: {file}')
+                    name = file.split('/')[-1]
+                    epoch_nb = int(name.split('.')[0])
+                    #print(file, name, epoch_nb)
+                    if epoch_nb != best_epoch:
+                        os.remove(file)
 
-        GCN_model = GCN(n_in=features.shape[1], n_hid=args.hidden, n_out=args.nclass, dropout=args.dropout)
-        GCN_model.to(device)
-        optimizer = torch.optim.Adam(GCN_model.parameters(), lr=args.learningrate, weight_decay=args.weight_decay)
-        idx_train, idx_test = torch.tensor(train_idx, dtype=torch.long, device=device), torch.tensor(test_idx, dtype=torch.long, device=device)
+            print('Training finished.')
+            print('The best epoch model is ',best_epoch)
+            GCN_model.load_state_dict(torch.load('model/GCN/{}.pkl'.format(best_epoch)))
+            predict(features, adj, all_sample, test_idx)
 
-        '''
-        save a best model (with the minimum loss value)
-        if the loss didn't decrease in N epochs，stop the train process.
-        N can be set by args.patience 
-        '''
-        loss_values = []    #record the loss value of each epoch
-        # record the times with no loss decrease, record the best epoch
-        bad_counter, best_epoch = 0, 0
-        best = 1000   #record the lowest loss value
-        for epoch in range(args.epochs):
-            loss_values.append(train(epoch, optimizer, features, adj, labels, idx_train))
-            if loss_values[-1] < best:
-                best = loss_values[-1]
-                best_epoch = epoch
-                bad_counter = 0
-            else:
-                bad_counter += 1     #In this epoch, the loss value didn't decrease
-
-            if bad_counter == args.patience:
-                break
-
-            #save model of this epoch
-            torch.save(GCN_model.state_dict(), 'model/GCN/{}.pkl'.format(epoch))
-
-            #reserve the best model, delete other models
-            files = glob.glob('model/GCN/*.pkl')
-            for file in files:
-                name = file.split('\\')[1]
-                epoch_nb = int(name.split('.')[0])
-                #print(file, name, epoch_nb)
-                if epoch_nb != best_epoch:
-                    os.remove(file)
-
-        print('Training finished.')
-        print('The best epoch model is ',best_epoch)
-        GCN_model.load_state_dict(torch.load('model/GCN/{}.pkl'.format(best_epoch)))
-        predict(features, adj, all_sample, test_idx)
-
+    pd.concat([result_df,
+               pd.DataFrame(result)]).to_csv(args.output_file, index=False)
     print('Finished!')

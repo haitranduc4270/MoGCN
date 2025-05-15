@@ -1,0 +1,12 @@
+fpkm_path: "data/fpkm_data.csv"
+gistic_path: "data/gistic_data.csv"
+rppa_path: "data/rppa_data.csv"
+sample_classes_path: "data/sample_classes.csv"
+exp_name: "experiment_1.4"
+use_limma: False
+use_lasso: False
+use_ae: True
+limma_thresholds: [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8]
+chi2_thresholds: [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8]
+lasso_alpha_values: [0.4, 0.6, 0.8, 1, 1.2, 1.4, 1.6, 1.8, 2]
+ae_latent_dims: [50, 100, 150, 200, 250, 300]

@@ -44,7 +44,7 @@ if __name__ == '__main__':
     omics_data_3.sort_values(by='Sample', ascending=True, inplace=True)
 
     print('Start similarity network fusion...')
-    affinity_nets = snf.make_affinity([omics_data_1.iloc[:, 1:].values.astype(np.float), omics_data_2.iloc[:, 1:].values.astype(np.float), omics_data_3.iloc[:, 1:].values.astype(np.float)],
+    affinity_nets = snf.make_affinity([omics_data_1.iloc[:, 1:].values.astype(np.float64), omics_data_2.iloc[:, 1:].values.astype(np.float64), omics_data_3.iloc[:, 1:].values.astype(np.float64)],
                                       metric=args.metric, K=args.K, mu=args.mu)
 
     fused_net =snf.snf(affinity_nets, K=args.K)

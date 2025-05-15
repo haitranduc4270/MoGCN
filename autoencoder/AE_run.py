@@ -7,15 +7,33 @@ import pandas as pd
 import numpy as np
 import argparse
 from tqdm import tqdm
-import autoencoder_model
+from autoencoder import autoencoder_model
 import torch
 import torch.utils.data as Data
 
 def setup_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
+    
+def preprocess_data(omics_data1, omics_data2, omics_data3):
+    #dims of each omics data
+    in_feas = [omics_data1.shape[1] - 1, omics_data2.shape[1] - 1, omics_data3.shape[1] - 1]
+    omics_data1.rename(columns={omics_data1.columns.tolist()[0]: 'Sample'}, inplace=True)
+    omics_data2.rename(columns={omics_data2.columns.tolist()[0]: 'Sample'}, inplace=True)
+    omics_data3.rename(columns={omics_data3.columns.tolist()[0]: 'Sample'}, inplace=True)
 
-def work(data, in_feas, lr=0.001, bs=32, epochs=100, device=torch.device('cpu'), a=0.4, b=0.3, c=0.3, mode=0, topn=100):
+    omics_data1.sort_values(by='Sample', ascending=True, inplace=True)
+    omics_data2.sort_values(by='Sample', ascending=True, inplace=True)
+    omics_data3.sort_values(by='Sample', ascending=True, inplace=True)
+
+    #merge the multi-omics data, calculate on common samples
+    Merge_data = pd.merge(omics_data1, omics_data2, on='Sample', how='inner')
+    Merge_data = pd.merge(Merge_data, omics_data3, on='Sample', how='inner')
+    Merge_data.sort_values(by='Sample', ascending=True, inplace=True)
+    
+    return Merge_data, in_feas
+
+def work(data, in_feas, lr=0.001, bs=32, epochs=100, device=torch.device('cpu'), a=0.4, b=0.3, c=0.3, mode=0, topn=100, latent_dim=100):
     #name of sample
     sample_name = data['Sample'].tolist()
 
@@ -26,20 +44,22 @@ def work(data, in_feas, lr=0.001, bs=32, epochs=100, device=torch.device('cpu'),
     if mode == 0 or mode == 1:
         print('Training model...')
         Tensor_data = Data.TensorDataset(TX, TY)
+        print(len(Tensor_data))
         train_loader = Data.DataLoader(Tensor_data, batch_size=bs, shuffle=True)
 
         #initialize a model
-        mmae = autoencoder_model.MMAE(in_feas, latent_dim=100, a=a, b=b, c=c)
+        mmae = autoencoder_model.MMAE(in_feas, latent_dim=latent_dim, a=a, b=b, c=c)
         mmae.to(device)
         mmae.train()
         mmae.train_MMAE(train_loader, learning_rate=lr, device=device, epochs=epochs)
         mmae.eval()       #before save and test, fix the variables
-        torch.save(mmae, '/kaggle/working/MoGCN/model/AE/MMAE_model.pkl')
+        # torch.save(mmae, '/kaggle/working/MoGCN/model/AE/MMAE_model.pkl')
 
     #load saved model, used for reducing dimensions
     if mode == 0 or mode == 2:
-        print('Get the latent layer output...')
-        mmae = torch.load('/kaggle/working/MoGCN/model/AE/MMAE_model.pkl')
+        if mode == 2:
+            print('Get the latent layer output...')
+            mmae = torch.load('/kaggle/working/MoGCN/model/AE/MMAE_model.pkl')
         omics_1 = TX[:, :in_feas[0]]
         omics_2 = TX[:, in_feas[0]:in_feas[0]+in_feas[1]]
         omics_3 = TX[:, in_feas[0]+in_feas[1]:in_feas[0]+in_feas[1]+in_feas[2]]
@@ -47,11 +67,11 @@ def work(data, in_feas, lr=0.001, bs=32, epochs=100, device=torch.device('cpu'),
         latent_df = pd.DataFrame(latent_data.detach().cpu().numpy())
         latent_df.insert(0, 'Sample', sample_name)
         #save the integrated data(dim=100)
-        latent_df.to_csv('result/latent_data.csv', header=True, index=False)
-
-    print('Extract features...')
-    extract_features(data, in_feas, epochs, topn)
-    return
+        # latent_df.to_csv('result/latent_data.csv', header=True, index=False)
+    return latent_df
+    # print('Extract features...')
+    # extract_features(data, in_feas, epochs, topn)
+    # return
 
 def extract_features(data, in_feas, epochs, topn=100):
     # extract features
@@ -123,6 +143,30 @@ def extract_features(data, in_feas, epochs, topn=100):
     topn_omics_2.to_csv('result/topn_omics_2.csv', header=True, index=False)
     topn_omics_3.to_csv('result/topn_omics_3.csv', header=True, index=False)
 
+
+def run_ae(omics_data1, 
+           omics_data2, 
+           omics_data3, 
+           lr=0.001, 
+           bs=32, 
+           epochs=100, 
+           device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'), 
+           a=0.6, 
+           b=0.1, 
+           c=0.3, 
+           mode=0, 
+           topn=100,
+           latent_dim=100):
+    
+    #read data
+    Merge_data, in_feas = preprocess_data(omics_data1, omics_data2, omics_data3)
+
+    #train model, reduce dimensions and extract features
+    latent_df = work(Merge_data, in_feas, lr=lr, bs=bs, epochs=epochs, device=device, a=a, b=b, c=c, mode=mode, topn=topn, latent_dim=latent_dim)
+    return latent_df
+    
+    # print('Success! Results can be seen in result file')
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', '-m', type=int, choices=[0,1,2], default=0,
@@ -142,11 +186,6 @@ if __name__ == '__main__':
     parser.add_argument('--topn', '-n', type=int, default=100, help='Extract top N features every 10 epochs, default: 100.')
     args = parser.parse_args()
 
-    #read data
-    omics_data1 = pd.read_csv(args.path1, header=0, index_col=None)
-    omics_data2 = pd.read_csv(args.path2, header=0, index_col=None)
-    omics_data3 = pd.read_csv(args.path3, header=0, index_col=None)
-
     #Check whether GPUs are available
     device = torch.device('cpu')
     if args.device == 'gpu':
@@ -158,21 +197,13 @@ if __name__ == '__main__':
     if args.a + args.b + args.c != 1.0:
         print('The sum of weights must be 1.')
         exit(1)
+    
+    #read data
+    omics_data1 = pd.read_csv(args.path1, header=0, index_col=None)
+    omics_data2 = pd.read_csv(args.path2, header=0, index_col=None)
+    omics_data3 = pd.read_csv(args.path3, header=0, index_col=None)
 
-    #dims of each omics data
-    in_feas = [omics_data1.shape[1] - 1, omics_data2.shape[1] - 1, omics_data3.shape[1] - 1]
-    omics_data1.rename(columns={omics_data1.columns.tolist()[0]: 'Sample'}, inplace=True)
-    omics_data2.rename(columns={omics_data2.columns.tolist()[0]: 'Sample'}, inplace=True)
-    omics_data3.rename(columns={omics_data3.columns.tolist()[0]: 'Sample'}, inplace=True)
-
-    omics_data1.sort_values(by='Sample', ascending=True, inplace=True)
-    omics_data2.sort_values(by='Sample', ascending=True, inplace=True)
-    omics_data3.sort_values(by='Sample', ascending=True, inplace=True)
-
-    #merge the multi-omics data, calculate on common samples
-    Merge_data = pd.merge(omics_data1, omics_data2, on='Sample', how='inner')
-    Merge_data = pd.merge(Merge_data, omics_data3, on='Sample', how='inner')
-    Merge_data.sort_values(by='Sample', ascending=True, inplace=True)
+    Merge_data, in_feas = preprocess_data(omics_data1, omics_data2, omics_data3)
 
     #train model, reduce dimensions and extract features
     work(Merge_data, in_feas, lr=args.learningrate, bs=args.batchsize, epochs=args.epoch, device=device, a=args.a, b=args.b, c=args.c, mode=args.mode, topn=args.topn)

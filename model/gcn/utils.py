@@ -22,6 +22,9 @@ def load_data(adj, fea, lab, threshold=0.005):
         print('Input files must have same samples.')
         exit(1)
 
+    if 'Unnamed: 0' in fea_df.columns:
+        fea_df.drop(columns=['Unnamed: 0'], inplace=True)
+        
     adj_df.rename(columns={adj_df.columns.tolist()[0]: 'Sample'}, inplace=True)
     fea_df.rename(columns={fea_df.columns.tolist()[0]: 'Sample'}, inplace=True)
     label_df.rename(columns={label_df.columns.tolist()[0]: 'Sample'}, inplace=True)

@@ -93,11 +93,11 @@ class MMAE(nn.Module):
             print('epoch: %d | loss: %.4f' % (epoch + 1, train_loss_sum))
 
             #save the model every 10 epochs, used for feature extraction
-            if (epoch+1) % 10 ==0:
-                torch.save(self, '/kaggle/working/MoGCN/model/AE/model_{}.pkl'.format(epoch+1))
+            # if (epoch+1) % 10 ==0:
+            #     torch.save(self, '/kaggle/working/MoGCN/model/AE/model_{}.pkl'.format(epoch+1))
 
         #draw the training loss curve
-        plt.plot([i + 1 for i in range(epochs)], loss_ls)
-        plt.xlabel('epochs')
-        plt.ylabel('loss')
-        plt.savefig('result/AE_train_loss.png')
+        # plt.plot([i + 1 for i in range(epochs)], loss_ls)
+        # plt.xlabel('epochs')
+        # plt.ylabel('loss')
+        # plt.savefig('result/AE_train_loss.png')

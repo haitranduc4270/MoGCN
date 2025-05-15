@@ -1,3 +1,17 @@
 data/
-model/
+# model/
 result/
+experiments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+*.whl
+*.tar.gz
+*.zip
+*.log
+*.out
+.env

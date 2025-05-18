@@ -1,0 +1,2 @@
+run on tesla
+conda activate /home/cuongld/anaconda3/envs/vad
